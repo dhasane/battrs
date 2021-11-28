@@ -8,11 +8,11 @@ use battery::Battery;
 use daemonize::Daemonize;
 
 fn main() -> Result<(), battery::Error> {
-    let stdout = File::create("/tmp/daemon.out").unwrap();
-    let stderr = File::create("/tmp/daemon.err").unwrap();
+    let stdout = File::create("/tmp/battrs_daemon.out").unwrap();
+    let stderr = File::create("/tmp/battrs_daemon.err").unwrap();
 
     let daemonize = Daemonize::new()
-        .pid_file("/tmp/test.pid") // Every method except `new` and `start`
+        .pid_file("/tmp/battrs_daemon.pid") // Every method except `new` and `start`
         .chown_pid_file(true) // is optional, see `Daemonize` documentation
         .working_directory("/tmp") // for default behaviour.
         .user("nobody")
@@ -32,35 +32,44 @@ fn main() -> Result<(), battery::Error> {
 
     let sleep_time = Duration::from_secs(60);
 
+    // Percentages at which to generate a notification
     let notif_perc = vec![100, 75, 50, 25, 10, 5];
-    let mut pos = 0;
 
-    let mut first = true;
+    // State of each battery
+    let mut state: Vec<i16> = vec![];
 
     loop {
-        manager.batteries()?.into_iter().for_each(|maybe_battery| {
-            let battery = maybe_battery.unwrap();
-            let perc: i32 =
-                (100 as f32 * (battery.energy().value / battery.energy_full().value)) as i32;
+        manager
+            .batteries()?
+            .enumerate()
+            .into_iter()
+            .for_each(|(id, maybe_battery)| {
+                let battery = maybe_battery.unwrap();
+                let perc: i32 = bat_percent(&battery);
 
-            // println!(" en {} a {} :: {}", notif_perc[pos], perc, pos);
-            if first {
-                notif(battery, perc);
-                while notif_perc[pos] > perc {
-                    pos += 1;
+                if state.len() <= id {
+                    let mut pos: i16 = 0;
+                    while notif_perc[pos as usize] > perc {
+                        pos += 1;
+                    }
+                    state.push(pos);
+                };
+
+                if notif_perc[state[id] as usize] > perc {
+                    notif(battery, perc);
+                    state[id] += 1;
+                } else if state[id] != 0 && notif_perc[(state[id] - 1) as usize] <= perc {
+                    notif(battery, perc);
+                    state[id] -= 1;
                 }
-                first = false;
-            } else if notif_perc[pos] > perc {
-                notif(battery, perc);
-                pos += 1;
-            } else if pos != 0 && notif_perc[pos - 1] <= perc {
-                notif(battery, perc);
-                pos -= 1;
-            }
-        });
+            });
 
         thread::sleep(sleep_time);
     }
+}
+
+fn bat_percent(battery: &Battery) -> i32 {
+    (100.0 * (battery.energy().value / battery.energy_full().value)) as i32
 }
 
 fn notif(battery: Battery, perc: i32) {
